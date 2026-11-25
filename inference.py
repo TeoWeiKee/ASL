@@ -1,11 +1,13 @@
-import pickle
+from collections import deque
 import cv2
-import mediapipe as mp # Help to isolates hand and detect 21 distinct joints
+import mediapipe as mp
 import numpy as np
+import os
+from tensorflow.keras.models import load_model
 
-# Load your trained model
-model_dict = pickle.load(open('model.p', 'rb'))
-model = model_dict['model']
+# Load your trained LSTM model
+model = load_model('action_model.keras')
+letters = sorted(os.listdir('./data'))
 
 cap = cv2.VideoCapture(0)
 
@@ -13,8 +15,11 @@ mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
 
-print('Starting real-time recognition! Show your hand to the camera.')
-print('Press "Q" on your keyboard to quit.')
+# Sliding window buffer to hold the last 30 frames of coordinates
+window = deque(maxlen=30)
+predicted_character = "Waiting..."
+
+print('Starting real-time sequence recognition! Press "Q" to quit.')
 
 while True:
     success, frame = cap.read()
@@ -25,26 +30,35 @@ while True:
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     results = hands.process(rgb_frame)
+    
+    current_landmarks = [0.0] * 63
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
             mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-
-            # Extract hand landmarks
+            
             landmarks = []
-            for landmark in hand_landmarks.landmark:
-                landmarks.extend([landmark.x, landmark.y, landmark.z])
+            for lm in hand_landmarks.landmark:
+                landmarks.extend([lm.x, lm.y, lm.z])
+            current_landmarks = landmarks
 
-            # Predict which letter you are making
-            prediction = model.predict([np.array(landmarks)])
-            predicted_character = prediction[0]
+    # Append current frame's landmarks to our rolling window
+    window.append(current_landmarks)
 
-            # Display the predicted letter on the screen in big green text
-            cv2.putText(frame, f'Prediction: {predicted_character}', (50, 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 0), 3, cv2.LINE_AA)
+    # Once we have a full window of 30 frames, make a prediction
+    if len(window) == 30:
+        res = model.predict(np.expand_dims(window, axis=0), verbose=0)[0]
+        best_match_index = np.argmax(res)
+        
+        # Only display prediction if confidence is high (> 75%)
+        if res[best_match_index] > 0.75:
+            predicted_character = letters[best_match_index]
 
-    cv2.imshow('ASL Real-Time Recognition', frame)
+    # Display prediction on screen
+    cv2.putText(frame, f'Prediction: {predicted_character}', (40, 50), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
 
-    # Press 'q' to exit the window
+    cv2.imshow('ASL Dynamic Recognition', frame)
+
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 

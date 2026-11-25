@@ -1,44 +1,49 @@
 import os
-import pickle
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 
 DATA_DIR = './data'
+letters = sorted(os.listdir(DATA_DIR))
 
-data = []
-labels = []
+# Map each letter label to a number index
+label_map = {label: num for num, label in enumerate(letters)}
 
-# Load all recorded landmark files from the data folders
-print("Loading dataset...")
-for letter in os.listdir(DATA_DIR):
+sequences, labels = [], []
+
+print("Loading sequence data...")
+for letter in letters:
     letter_path = os.path.join(DATA_DIR, letter)
     if os.path.isdir(letter_path):
-        for img_file in os.listdir(letter_path):
-            if img_file.endswith('.npy'):
-                landmarks = np.load(os.path.join(letter_path, img_file))
-                data.append(landmarks)
-                labels.append(letter)
+        for file_name in os.listdir(letter_path):
+            if file_name.endswith('.npy'):
+                window = np.load(os.path.join(letter_path, file_name))
+                sequences.append(window)
+                labels.append(label_map[letter])
 
-data = np.array(data)
-labels = np.array(labels)
+X = np.array(sequences)
+y = to_categorical(labels).astype(int)
 
-# Split data into training and testing sets (80% train, 20% test)
-x_train, x_test, y_train, y_test = train_test_split(data, labels, test_size=0.2, shuffle=True, random_state=42)
+# Split into training and testing sets (80% train, 20% test)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=42)
 
-# Train a fast and accurate Random Forest classifier
+print("Building LSTM model architecture...")
+model = Sequential([
+    LSTM(64, return_sequences=True, activation='relu', input_shape=(30, 63)),
+    Dropout(0.2),
+    LSTM(128, return_sequences=False, activation='relu'),
+    Dropout(0.2),
+    Dense(64, activation='relu'),
+    Dense(len(letters), activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
 print("Training model...")
-model = RandomForestClassifier()
-model.fit(x_train, y_train)
+model.fit(X_train, y_train, epochs=50, batch_size=16, validation_data=(X_test, y_test))
 
-# Test model accuracy
-y_predict = model.predict(x_test)
-score = accuracy_score(y_predict, y_test)
-print(f"Model trained successfully! Accuracy: {score * 100:.2f}%")
-
-# Save the trained model to a file
-with open('model.p', 'wb') as f:
-    pickle.dump({'model': model}, f)
-
-print("Model saved as 'model.p' successfully!")
+# Save the trained deep learning model
+model.save('action_model.keras')
+print("Model trained and saved successfully as 'action_model.keras'!")
